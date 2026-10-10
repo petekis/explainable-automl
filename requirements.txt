@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+matplotlib
+scikit-learn
+ydata-profiling
+python-dotenv
+google-genai
