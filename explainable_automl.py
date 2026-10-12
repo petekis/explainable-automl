@@ -277,6 +277,7 @@ def model_selection():
         "Random Forest Regressor", "Random Forest Classifier", "Support Vector Machine Regressor","Support Vector Machine Classifier", "Decision Tree Classifier","Decision Tree Regressor",
         "Logistic Regressor","Gradient Boosting Regressor", "KNN", "Linear Regressor"), key="model_selection")
         if st.button("Apply Model"):
+            st.session_state.trained_models = {}
 
             task_type = get_tasktype(model)
             result = model_process(model, task_type)
@@ -309,6 +310,7 @@ def model_selection():
             model_list = model_list[task_type]
 
         if st.button("Run AutoML"):
+            st.session_state.trained_models = {}
             results = []
 
             for model in model_list:
@@ -375,21 +377,23 @@ def model_process(model, task_type):
     X_test = st.session_state.X_test.copy()
     y_train = st.session_state.y_train
     y_test = st.session_state.y_test
+    feature_names = X_train.columns.tolist()
 
-    if not isinstance(model_object, (LinearRegression, SVR, SVC, KNeighborsClassifier, LogisticRegression)):
-        model_object.fit(X_train, y_train)
-        prediction = model_object.predict(X_test)
-        result = show_result(model, task_type, y_test, prediction)
-        return result
-
-    else:
+    scaler = None
+    if isinstance(model_object, (LinearRegression, SVR, SVC, KNeighborsClassifier, LogisticRegression)):
         scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
-        model_object.fit(X_train_scaled, y_train)
-        prediction = model_object.predict(X_test_scaled)
-        result = show_result(model, task_type, y_test, prediction)
-        return result
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
+    model_object.fit(X_train, y_train)
+    prediction = model_object.predict(X_test)
+
+    st.session_state.trained_models[model] = {
+        "model": model_object,
+        "scaler": scaler,
+        "feature_names": feature_names
+    }
+    return show_result(model, task_type, y_test, prediction)
 
 def show_result(model, task_type, y_test, prediction):
     if task_type == "regression":
