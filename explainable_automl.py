@@ -61,6 +61,20 @@ def analize_data(df):
         profile = ProfileReport(df, title="Data Analysis")
         components.html(profile.to_html(), height=1000, scrolling=True)
 
+HIGH_MISSING_RATIO = 50
+def missing_value_advice(series, percentage):
+    is_numeric = pd.api.types.is_numeric_dtype(series)
+    if percentage > HIGH_MISSING_RATIO:
+        if is_numeric:
+            return ("More than half of the values are missing. Imputation would mostly create "
+                    "artificial values; consider dropping this column.")
+        return ("More than half of the values are missing. Instead of imputation, encode this column "
+                "so that missing values become their own category, or drop it.")
+    if is_numeric:
+        return "Median imputation is recommended."
+    return "Mode (most frequent value) imputation is recommended."
+
+
 def basic_analysis(df):
     with st.expander("Basic Analysis"):
         st.write(
@@ -100,32 +114,16 @@ def show_recommendations(df):
                     "method": "One-Hot Encoding",
                     "recommendation": "Categorical column with more than two categories. One-Hot Encoding is recommended."
                 })
-    missing = df.isnull().sum()
     missing_ratio = df.isnull().sum() * 100 / df.shape[0]
-    if missing.sum() != 0:
+    missing_ratio = missing_ratio[missing_ratio > 0]
+    if not missing_ratio.empty:
         rec_dict["missing_val"] = []
         for column, percentage in missing_ratio.items():
-            if 1 <= percentage <= 10:
-                rec_dict["missing_val"].append(
-                    {
-                        "column": column,
-                        "recommendation": "Mean/Median Imputation"
-                    }
-                )
-            elif 10 < percentage <= 50:
-                rec_dict["missing_val"].append(
-                    {
-                        "column": column,
-                        "recommendation": "Imputation is recommended."
-                    }
-                )
-            elif 50 < percentage:
-                rec_dict["missing_val"].append(
-                    {
-                        "column": column,
-                        "recommendation": "Consider to remove this feature."
-                    }
-                )
+            rec_dict["missing_val"].append({
+                "column": column,
+                "missing_percentage": round(percentage, 1),
+                "recommendation": missing_value_advice(df[column], percentage)
+            })
     if df.duplicated(keep=False).sum() != 0:
         rec_dict["duplicated"] = {}
         rec_dict["duplicated"]["recommendation"] = "There are duplicated rows needed to drop."
@@ -144,7 +142,7 @@ def display_recommendations(rec_dict):
     if "missing_val" in rec_dict:
         st.write("**Missing Values:**")
         for item in rec_dict["missing_val"]:
-            st.write(f"- `{item['column']}`: {item['recommendation']}")
+            st.write(f"- `{item['column']}` ({item['missing_percentage']}% missing): {item['recommendation']}")
 
     if "duplicated" in rec_dict:
         st.warning(rec_dict["duplicated"]["recommendation"])
