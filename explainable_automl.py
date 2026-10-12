@@ -53,7 +53,7 @@ def reset_state():
     for key, value in DEFAULTS.items():
         if key not in KEEP_ON_RESET:
             st.session_state[key] = copy.deepcopy(value)
-    for widget_key in ["target", "encoding_column", "imputation_columns"]:
+    for widget_key in ["target", "encoding_column", "imputation_columns","drop_column"]:
         st.session_state.pop(widget_key, None)
 
 def analize_data(df):
@@ -150,7 +150,7 @@ def display_recommendations(rec_dict):
 def apply_recommendations():
     X_train = st.session_state.X_train.copy()
     X_test = st.session_state.X_test.copy()
-    choice = st.selectbox("Please select the operation: ", ("Scaling", "Encoding", "Imputation"), key="operation_choice")
+    choice = st.selectbox("Please select the operation: ", ("Scaling", "Encoding", "Imputation", "Drop Column"), key="operation_choice")
 
     if choice == "Encoding":
         categorical_columns =X_train.select_dtypes(include=["object", "category"]).columns
@@ -211,6 +211,19 @@ def apply_recommendations():
             st.session_state.X_test = X_test
             st.success("Imputation applied.")
             st.rerun()
+    elif choice == "Drop Column":
+        if X_train.shape[1] <= 1:
+            st.info("At least one feature column must remain, so no more columns can be dropped.")
+        else:
+            column = st.selectbox("Please select the column to drop: ", X_train.columns, key="drop_column")
+            if st.button("Run Drop Column"):
+                X_train = X_train.drop(columns=[column])
+                X_test = X_test.drop(columns=[column])
+                st.session_state.X_train = X_train
+                st.session_state.X_test = X_test
+                st.success(f"`{column}` dropped.")
+                st.rerun()
+
 
 def get_tasktype(model):
     classification_models = {"Random Forest Classifier", "Support Vector Machine Classifier",
