@@ -57,6 +57,13 @@ def reset_state():
     for widget_key in ["target", "encoding_column", "imputation_columns","drop_column"]:
         st.session_state.pop(widget_key, None)
 
+RESULT_KEYS = ["results_df", "selected_model", "task_type", "selected_choice",
+               "trained_models", "results_explanation"]
+
+def clear_results():
+    for key in RESULT_KEYS:
+        st.session_state[key] = copy.deepcopy(DEFAULTS[key])
+
 def analize_data(df):
     with st.spinner("Analizing data..."):
         profile = ProfileReport(df, title="Data Analysis")
@@ -194,6 +201,7 @@ def apply_recommendations():
                     X_test = pd.concat([X_test.drop(columns=[column]), test_enc_df], axis=1)
                 st.session_state.X_train = X_train
                 st.session_state.X_test = X_test
+                clear_results()
                 st.success("Encoding applied.")
                 st.rerun()
     elif choice == "Scaling":
@@ -207,6 +215,7 @@ def apply_recommendations():
                 X_test[numerical_columns] = scaler.transform(X_test[numerical_columns])
                 st.session_state.X_train = X_train
                 st.session_state.X_test = X_test
+                clear_results()
                 st.success("Scaling applied.")
                 st.rerun()
     elif choice == "Imputation":
@@ -228,6 +237,7 @@ def apply_recommendations():
             X_test[column] = X_test[column].fillna(fill_value)
             st.session_state.X_train = X_train
             st.session_state.X_test = X_test
+            clear_results()
             st.success("Imputation applied.")
             st.rerun()
     elif choice == "Drop Column":
@@ -240,6 +250,7 @@ def apply_recommendations():
                 X_test = X_test.drop(columns=[column])
                 st.session_state.X_train = X_train
                 st.session_state.X_test = X_test
+                clear_results()
                 st.success(f"`{column}` dropped.")
                 st.rerun()
 
@@ -277,7 +288,7 @@ def model_selection():
         "Random Forest Regressor", "Random Forest Classifier", "Support Vector Machine Regressor","Support Vector Machine Classifier", "Decision Tree Classifier","Decision Tree Regressor",
         "Logistic Regressor","Gradient Boosting Regressor", "KNN", "Linear Regressor"), key="model_selection")
         if st.button("Apply Model"):
-            st.session_state.trained_models = {}
+            clear_results()
 
             task_type = get_tasktype(model)
             result = model_process(model, task_type)
@@ -288,7 +299,6 @@ def model_selection():
             st.session_state.selected_model = result
             st.session_state.selected_choice = choice
 
-            st.dataframe(results_df)
     else:
         unique_ratio = y_train.nunique() / len(y_train)
         recommended_task = "classification" if unique_ratio <= 0.30 else "regression"
@@ -310,7 +320,7 @@ def model_selection():
             model_list = model_list[task_type]
 
         if st.button("Run AutoML"):
-            st.session_state.trained_models = {}
+            clear_results()
             results = []
 
             for model in model_list:
@@ -336,11 +346,14 @@ def model_selection():
                 ]
             st.session_state.selected_model = selected_model
             st.session_state.selected_choice = choice
-            st.dataframe(results_df)
 
-            st.success(
-                f"Selected Model: {selected_model['Model']}"
-            )
+def display_results():
+    if st.session_state.results_df is None:
+        return
+    st.subheader("Results")
+    st.dataframe(st.session_state.results_df)
+    if st.session_state.selected_choice == "AutoML Selection":
+        st.success(f"Selected Model: {st.session_state.selected_model['Model']}")
 
 def model_process(model, task_type):
     if model == "Random Forest Regressor":
@@ -559,6 +572,7 @@ if st.session_state.raw_df is not None:
 
     st.subheader("Model Selection")
     model_selection()
+    display_results()
 
     if st.button("Explain Results with Gemini"):
 
