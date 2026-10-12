@@ -17,7 +17,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import os
 from dotenv import load_dotenv
 from google import genai
-
+import copy 
 
 load_dotenv()
 
@@ -26,43 +26,35 @@ api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key)
 
 st.title("Explainable AutoML")
-if "file_type" not in st.session_state:
-    st.session_state.file_type = None
+DEFAULTS = {
+    "file_type": None,
+    "raw_df": None,
+    "X_train": None,
+    "X_test": None,
+    "y_train": None,
+    "y_test": None,
+    "target_column": None,
+    "task_type": None,
+    "results_df": None,
+    "selected_model": None,
+    "selected_choice": None,
+    "trained_models": {},
+    "preprocess_explanation": None,
+    "results_explanation": None,
+}
 
-if "raw_df" not in st.session_state:
-    st.session_state.raw_df = None
+KEEP_ON_RESET = ["file_type", "raw_df"]
 
-if "results_df" not in st.session_state:
-    st.session_state.results_df = None
-
-if "task_type" not in st.session_state:
-    st.session_state.task_type = None
-
-if "selected_model" not in st.session_state:
-    st.session_state.selected_model = None
-
-if "X_train" not in st.session_state:
-    st.session_state.X_train = None
-
-if "X_test" not in st.session_state:
-    st.session_state.X_test = None
-
-if "y_test" not in st.session_state:
-    st.session_state.y_test = None
-
-if "y_train" not in st.session_state:
-    st.session_state.y_train = None
-
-if "target" not in st.session_state:
-    st.session_state.target_column = None
+for key, value in DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = copy.deepcopy(value)
 
 def reset_state():
-    for key in ["selected_choice", "results_df", "task_type", "selected_model",
-                "X_train", "X_test", "y_test", "y_train", "target_column"]:
-        st.session_state[key] = None
+    for key, value in DEFAULTS.items():
+        if key not in KEEP_ON_RESET:
+            st.session_state[key] = copy.deepcopy(value)
     for widget_key in ["target", "encoding_column", "imputation_columns"]:
         st.session_state.pop(widget_key, None)
-
 
 def analize_data(df):
     with st.spinner("Analizing data..."):
