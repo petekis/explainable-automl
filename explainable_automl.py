@@ -29,6 +29,7 @@ st.title("Explainable AutoML")
 DEFAULTS = {
     "file_type": None,
     "raw_df": None,
+    "processed_df": None,
     "X_train": None,
     "X_test": None,
     "y_train": None,
@@ -43,7 +44,7 @@ DEFAULTS = {
     "results_explanation": None,
 }
 
-KEEP_ON_RESET = ["file_type", "raw_df"]
+KEEP_ON_RESET = ["file_type", "raw_df", "processed_df"]
 
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -85,7 +86,7 @@ def basic_analysis(df):
             "Missing ratio: ", df.isnull().sum() * 100 / df.shape[0],
             "Numerical Columns: ", df.select_dtypes(include=["int64", "float64"]).columns,
             "Categorical Columns: ", df.select_dtypes(include=["object", "category"]),
-            "Number of duplicated rows: ", df.duplicated(keep=False).sum()
+            "Number of duplicated rows (extra copies): ", df.duplicated().sum()
         )
 
 def show_recommendations(df):
@@ -124,12 +125,23 @@ def show_recommendations(df):
                 "missing_percentage": round(percentage, 1),
                 "recommendation": missing_value_advice(df[column], percentage)
             })
-    if df.duplicated(keep=False).sum() != 0:
-        rec_dict["duplicated"] = {}
-        rec_dict["duplicated"]["recommendation"] = "There are duplicated rows needed to drop."
+    duplicated_mask = df.duplicated(keep=False)
+    if duplicated_mask.any():
+        groups = int(df[duplicated_mask].drop_duplicates().shape[0])
+        extra_copies = int(df.duplicated().sum())
+        rec_dict["duplicated"] = {
+            "groups": groups,
+            "extra_copies": extra_copies,
+            "recommendation": (
+                f"{groups} distinct rows appear more than once ({extra_copies} extra copies). "
+                "If each row should be a unique record (e.g., the data has an ID column), these are likely "
+                "real duplicates and should be dropped. If identical rows can belong to different records "
+                "(e.g., there is no ID column), review them before dropping."
+            )
+        }
     return rec_dict
 
-def display_recommendations(rec_dict):
+def display_recommendations(rec_dict, df):
     if "scaling" in rec_dict:
         st.write("**Scaling:**", rec_dict["scaling"]["recommendation"])
         st.write("Etkilenen sütunlar:", rec_dict["scaling"]["numeric_col"])
@@ -146,6 +158,13 @@ def display_recommendations(rec_dict):
 
     if "duplicated" in rec_dict:
         st.warning(rec_dict["duplicated"]["recommendation"])
+        with st.expander("Show duplicated rows"):
+            duplicated_rows = (df[df.duplicated(keep=False)]
+                               .groupby(list(df.columns), dropna=False)
+                               .size()
+                               .reset_index(name="count")
+                               .sort_values("count", ascending=False))
+            st.dataframe(duplicated_rows)
 
 def apply_recommendations():
     X_train = st.session_state.X_train.copy()
@@ -490,12 +509,20 @@ if st.session_state.raw_df is not None:
     st.dataframe(st.session_state.raw_df)
 
     if st.button("Detailed Analysis (Profiling)"):
-        analize_data(st.session_state.raw_df)
+        analize_data(st.session_state.processed_df)
 
-    basic_analysis(st.session_state.raw_df)
+    basic_analysis(st.session_state.processed_df)
     st.subheader("Preprocessing Recommendations")
-    rest_dict = show_recommendations(st.session_state.raw_df)
-    display_recommendations(rest_dict)
+    rest_dict = show_recommendations(st.session_state.processed_df)
+    display_recommendations(rest_dict, st.session_state.processed_df)
+
+    if "duplicated" in rest_dict:
+        if st.session_state.X_train is None:
+            if st.button("Drop duplicate rows"):
+                st.session_state.processed_df = st.session_state.processed_df.drop_duplicates()
+                st.rerun()
+        else:
+            st.caption("Duplicate rows can only be dropped before splitting the data.")
 
     if rest_dict and st.button("Explain Recommendations with Gemini"):
         explanation = gemini_preprocess_explanation(rest_dict)
@@ -505,9 +532,9 @@ if st.session_state.raw_df is not None:
 
     st.subheader("Select Target Column")
     if st.session_state.X_train is None:
-        target = st.selectbox("Please select the target column", options=st.session_state.raw_df.columns, key="target")
+        target = st.selectbox("Please select the target column", options=st.session_state.processed_df.columns, key="target")
         if st.button("Split"):
-            df = st.session_state.raw_df.copy()
+            df = st.session_state.processed_df.copy()
             X = df.drop(target, axis=1)
             y = df[target]
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42)
