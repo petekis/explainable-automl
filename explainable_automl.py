@@ -216,7 +216,26 @@ def get_tasktype(model):
 
     return "classification" if model in classification_models else "regression"
 
+def check_training_readiness(X_train, X_test):
+    problems = []
+    categorical_columns = X_train.select_dtypes(include=["object", "category"]).columns.tolist()
+    if categorical_columns:
+        problems.append(f"Encode these categorical columns: {', '.join(categorical_columns)}")
+
+    missing = X_train.isnull().sum() + X_test.isnull().sum()
+    missing = missing[missing > 0]
+    if not missing.empty:
+        details = ", ".join(f"{column} ({count} missing)" for column, count in missing.items())
+        problems.append(f"Impute missing values in: {details}")
+
+    return problems
+
 def model_selection():
+    problems = check_training_readiness(st.session_state.X_train, st.session_state.X_test)
+    if problems:
+        st.warning("The data is not ready for model training yet:\n\n" +
+                   "\n".join(f"- {problem}" for problem in problems))
+        return
     y_train = st.session_state.y_train
     choice = st.radio("Model Selection Preference", ["Manual Selection", "AutoML Selection"])
     if choice == "Manual Selection":
