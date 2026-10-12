@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from streamlit import dataframe, session_state
 from ydata_profiling import ProfileReport
 import streamlit.components.v1 as components
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder, StandardScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVC, SVR
 from sklearn.linear_model import LogisticRegression, LinearRegression
@@ -155,27 +155,30 @@ def apply_recommendations():
     choice = st.selectbox("Please select the operation: ", ("Scaling", "Encoding", "Imputation"), key="operation_choice")
 
     if choice == "Encoding":
-        column = st.selectbox("Please select the column for encoding: ",  X_train.select_dtypes(include=["object", "category"]).columns,
-            key="encoding_column")
-        if st.button("Run Encoding"):
-            if X_train[column].nunique() <= 2:
-                le = LabelEncoder()
-                X_train[column] = le.fit_transform(X_train[column])
-                X_test[column] = le.transform(X_test[column])
-            else:
-                ohe = OneHotEncoder()
-                ohe.fit(X_train[[column]])
-                train_arr = ohe.transform(X_train[[column]])
-                test_arr = ohe.transform(X_test[[column]])
-                cols = ohe.get_feature_names_out([column])
-                train_enc_df = pd.DataFrame(train_arr, columns=cols, index=X_train.index)
-                test_enc_df = pd.DataFrame(test_arr, columns=cols, index=X_test.index)
-                X_train = pd.concat([X_train.drop(columns=[column]), train_enc_df], axis=1)
-                X_test = pd.concat([X_test.drop(columns=[column]), test_enc_df], axis=1)
-            st.session_state.X_train = X_train
-            st.session_state.X_test = X_test
-            st.success("Encoding applied.")
-            st.rerun()
+        categorical_columns =X_train.select_dtypes(include=["object", "category"]).columns
+        if len(categorical_columns) == 0:
+            st.info("There are no categorical columns left to encode.")
+        else:
+            column = st.selectbox("Please select the column for encoding: ", categorical_columns, key="encoding_column")
+            if st.button("Run Encoding"):
+                if X_train[column].nunique() <= 2:
+                    oe = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+                    X_train[[column]] = oe.fit_transform(X_train[[column]])
+                    X_test[[column]] = oe.transform(X_test[[column]])
+                else:
+                    ohe = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+                    ohe.fit(X_train[[column]])
+                    train_arr = ohe.transform(X_train[[column]])
+                    test_arr = ohe.transform(X_test[[column]])
+                    cols = ohe.get_feature_names_out([column])
+                    train_enc_df = pd.DataFrame(train_arr, columns=cols, index=X_train.index)
+                    test_enc_df = pd.DataFrame(test_arr, columns=cols, index=X_test.index)
+                    X_train = pd.concat([X_train.drop(columns=[column]), train_enc_df], axis=1)
+                    X_test = pd.concat([X_test.drop(columns=[column]), test_enc_df], axis=1)
+                st.session_state.X_train = X_train
+                st.session_state.X_test = X_test
+                st.success("Encoding applied.")
+                st.rerun()
     elif choice == "Scaling":
         numerical_columns = X_train.select_dtypes(include=["int64", "float64"]).columns
         if len(numerical_columns) == 0:
