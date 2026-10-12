@@ -104,8 +104,8 @@ def show_recommendations(df):
                 rec_dict["encoding"].append({
                     "column": column,
                     "unique_values": unique_count,
-                    "method": "Label Encoding",
-                    "recommendation": "Binary categorical column. Label Encoding is recommended."
+                    "method": "Ordinal Encoding",
+                    "recommendation": "Binary categorical column. Ordinal Encoding is recommended."
                 })
             else:
                 rec_dict["encoding"].append({
@@ -195,7 +195,11 @@ def apply_recommendations():
                               key="imputation_columns")
         st.write(f"Missing values in `{column}`: train = {X_train[column].isnull().sum()}, "
                  f"test = {X_test[column].isnull().sum()}")
-        
+        missing_percentage = X_train[column].isnull().mean() * 100
+        if missing_percentage > HIGH_MISSING_RATIO:
+            st.warning(f"{missing_percentage:.1f}% of `{column}` is missing in the training set. "
+                       + missing_value_advice(X_train[column], missing_percentage))
+            
         if st.button("Run Imputation"):
             if X_train[column].dtype in ["int64", "float64"]:
                 fill_value = X_train[column].median()
