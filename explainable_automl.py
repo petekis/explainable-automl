@@ -23,9 +23,11 @@ load_dotenv()
 
 api_key = os.getenv("GEMINI_API_KEY")
 
-client = genai.Client(api_key=api_key)
+client = genai.Client(api_key=api_key) if api_key else None
 
 st.title("Explainable AutoML")
+if client is None:
+    st.warning("GEMINI API key is not set in the .env file. AI explanations are disabled.")
 DEFAULTS = {
     "file_type": None,
     "raw_df": None,
@@ -435,12 +437,24 @@ def show_result(model, task_type, y_test, prediction):
         return result_dict
 
 def ask_gemini(prompt):
+    if client is None:
+        st.error("Gemini is not configured. Add GEMINI_API_KEY to your .env file.")
+        return None
 
-    interaction = client.interactions.create(
-        model = "gemini-3.6-flash",
-        input = prompt)
-
-    return interaction.output_text
+    try:
+        interaction = client.interactions.create(
+            model = "gemini-3.6-flash",
+            input = prompt)
+        return interaction.output_text
+    except Exception as error:
+        status = getattr(error, "status_code", None)
+        if status == 429:
+            st.error("Gemini quota exceeded. Please wait a while and try again.")
+        elif status in (401, 403):
+            st.error("Gemini rejected the API key. Please check GEMINI_API_KEY in your .env file.")
+        else:
+            st.error(f"Gemini could not generate an explanation: {error}")
+        return None
 
 def gemini_explanation(results_df, task_type, selected_model, selected_choice):
     if selected_choice == "Manual Selection":
@@ -541,7 +555,7 @@ if st.session_state.raw_df is not None:
         else:
             st.caption("Duplicate rows can only be dropped before splitting the data.")
 
-    if rest_dict and st.button("Explain Recommendations with Gemini"):
+    if rest_dict and st.button("Explain Recommendations with Gemini", disabled=client is None):
         explanation = gemini_preprocess_explanation(rest_dict)
         if explanation:
             st.subheader("AI Preprocessing Explanation")
@@ -574,7 +588,7 @@ if st.session_state.raw_df is not None:
     model_selection()
     display_results()
 
-    if st.button("Explain Results with Gemini"):
+    if st.button("Explain Results with Gemini", disabled=client is None):
 
         if (st.session_state.results_df is not None
             and st.session_state.selected_model is not None
