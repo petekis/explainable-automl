@@ -18,6 +18,7 @@ import os
 from dotenv import load_dotenv
 from google import genai
 import copy 
+import shap
 
 load_dotenv()
 
@@ -44,6 +45,8 @@ DEFAULTS = {
     "trained_models": {},
     "preprocess_explanation": None,
     "results_explanation": None,
+    "shap_values": None,
+    "shap_model": None
 }
 
 KEEP_ON_RESET = ["file_type", "raw_df", "processed_df"]
@@ -60,7 +63,7 @@ def reset_state():
         st.session_state.pop(widget_key, None)
 
 RESULT_KEYS = ["results_df", "selected_model", "task_type", "selected_choice",
-               "trained_models", "results_explanation"]
+               "trained_models", "results_explanation", "shap_values", "shap_model"]
 
 def clear_results():
     for key in RESULT_KEYS:
@@ -396,7 +399,7 @@ def model_process(model, task_type):
 
     scaler = None
     if isinstance(model_object, (LinearRegression, SVR, SVC, KNeighborsClassifier, LogisticRegression)):
-        scaler = StandardScaler()
+        scaler = StandardScaler().set_output(transform="pandas")
         X_train = scaler.fit_transform(X_train)
         X_test = scaler.transform(X_test)
 
@@ -409,6 +412,95 @@ def model_process(model, task_type):
         "feature_names": feature_names
     }
     return show_result(model, task_type, y_test, prediction)
+
+TREE_MODELS = (RandomForestClassifier, RandomForestRegressor, DecisionTreeClassifier,
+               DecisionTreeRegressor, GradientBoostingRegressor)
+LINEAR_MODELS = (LinearRegression, LogisticRegression)
+SHAP_BACKGROUND_SIZE = 100
+SHAP_SAMPLE_SIZE = 200
+SHAP_SLOW_SAMPLE_SIZE = 50
+
+def compute_shap(model_name):
+    if model_name not in st.session_state.trained_models:
+        st.error(f"Model '{model_name}' is not trained yet.")
+        return None
+
+    model_info = st.session_state.trained_models[model_name]
+    model_object = model_info["model"]
+    scaler = model_info["scaler"]
+    feature_names = model_info["feature_names"]
+
+    X_train = st.session_state.X_train[feature_names]
+    X_test = st.session_state.X_test[feature_names]
+    if scaler is not None:
+        X_train = scaler.transform(X_train)
+        X_test = scaler.transform(X_test)
+
+    background = shap.sample(X_train, SHAP_BACKGROUND_SIZE, random_state=42)
+    sample = shap.sample(X_test, SHAP_SAMPLE_SIZE, random_state=42)
+
+    if isinstance(model_object, TREE_MODELS):
+        explainer = shap.TreeExplainer(model_object)
+    elif isinstance(model_object, LINEAR_MODELS):
+        explainer = shap.LinearExplainer(model_object, background)
+    else:
+        background = shap.sample(background, SHAP_SLOW_SAMPLE_SIZE, random_state=42)
+        sample = shap.sample(sample, SHAP_SLOW_SAMPLE_SIZE, random_state=42)
+        predict = lambda data: model_object.predict(pd.DataFrame(data, columns=feature_names))
+        explainer = shap.Explainer(predict, background)
+
+    shap_values = explainer(sample)
+    st.session_state.shap_values = shap_values
+    st.session_state.shap_model = model_name
+    return shap_values
+
+def show_shap_plot(plot_function, explanation):
+    plot_function(explanation, show=False)
+    st.pyplot(plt.gcf())
+    plt.close()
+
+def display_shap():
+    if not st.session_state.trained_models:
+        return
+    st.subheader("Model Explainability (SHAP)")
+
+    model_names = list(st.session_state.trained_models)
+    default_model = st.session_state.selected_model["Model"]
+    model_name = st.selectbox("Model to explain", model_names, index=model_names.index(default_model))
+    model_object = st.session_state.trained_models[model_name]["model"]
+
+    if not isinstance(model_object, TREE_MODELS + LINEAR_MODELS):
+        st.caption("This model has no built-in SHAP support, so a slower model-agnostic method is used "
+                   f"on {SHAP_SLOW_SAMPLE_SIZE} test rows, and it explains the predicted value directly.")
+
+    if st.button("Compute SHAP values"):
+        with st.spinner("Computing SHAP values..."):
+            compute_shap(model_name)
+            
+
+    if st.session_state.shap_values is None or st.session_state.shap_model != model_name:
+        return
+
+    shap_values = st.session_state.shap_values
+    if shap_values.values.ndim == 3:
+        classes = list(model_object.classes_)
+        class_label = st.selectbox("Class to explain", classes, index=1 if len(classes) == 2 else 0)
+        shap_values = shap_values[:, :, classes.index(class_label)]
+
+    st.markdown("**Feature importance**")
+    show_shap_plot(shap.plots.bar, shap_values)
+    st.caption("Average absolute SHAP value: the longer the bar, the more the feature affects predictions.")
+
+    st.markdown("**Direction of the effect**")
+    show_shap_plot(shap.plots.beeswarm, shap_values)
+    st.caption("Each dot is one row. Red means a high feature value, blue a low one. "
+               "Dots to the right push the prediction up, dots to the left push it down.")
+
+    st.markdown("**Single prediction**")
+    row = st.number_input("Row to explain", min_value=0, max_value=len(shap_values) - 1, value=0)
+    show_shap_plot(shap.plots.waterfall, shap_values[row])
+    st.caption("Starts from the average prediction E[f(x)] and shows how each feature "
+               "moved this row's prediction to f(x).")
 
 def show_result(model, task_type, y_test, prediction):
     if task_type == "regression":
@@ -613,10 +705,12 @@ if st.session_state.raw_df is not None:
 
         else:
             st.warning("Please run AutoML before asking Gemini for an explanation.")
-            
+
     if st.session_state.results_explanation:
         st.subheader("AI Explanation")
         st.write(st.session_state.results_explanation)
+
+    display_shap()
 
 else:
     st.info("Please upload a dataset.")
