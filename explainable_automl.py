@@ -553,6 +553,7 @@ if st.session_state.raw_df is not None:
         if st.session_state.X_train is None:
             if st.button("Drop duplicate rows"):
                 st.session_state.processed_df = st.session_state.processed_df.drop_duplicates()
+                st.session_state.preprocess_explanation = None
                 st.rerun()
         else:
             st.caption("Duplicate rows can only be dropped before splitting the data.")
@@ -560,8 +561,11 @@ if st.session_state.raw_df is not None:
     if rest_dict and st.button("Explain Recommendations with Gemini", disabled=client is None):
         explanation = gemini_preprocess_explanation(rest_dict)
         if explanation:
-            st.subheader("AI Preprocessing Explanation")
-            st.write(explanation)
+            st.session_state.preprocess_explanation = explanation
+
+    if st.session_state.preprocess_explanation:
+        st.subheader("AI Preprocessing Explanation")
+        st.write(st.session_state.preprocess_explanation)
 
     st.subheader("Select Target Column")
     if st.session_state.X_train is None:
@@ -605,11 +609,14 @@ if st.session_state.raw_df is not None:
             )
 
             if explanation:
-                st.subheader("AI Explanation")
-                st.write(explanation)
+                st.session_state.results_explanation = explanation
 
         else:
             st.warning("Please run AutoML before asking Gemini for an explanation.")
+            
+    if st.session_state.results_explanation:
+        st.subheader("AI Explanation")
+        st.write(st.session_state.results_explanation)
 
 else:
     st.info("Please upload a dataset.")
