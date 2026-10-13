@@ -442,16 +442,18 @@ def ask_gemini(prompt):
         return None
 
     try:
-        interaction = client.interactions.create(
+        response = client.models.generate_content(
             model = "gemini-3.6-flash",
-            input = prompt)
-        return interaction.output_text
+            contents = prompt)
+        return response.text
     except Exception as error:
-        status = getattr(error, "status_code", None)
+        status = getattr(error, "code", None)
         if status == 429:
             st.error("Gemini quota exceeded. Please wait a while and try again.")
         elif status in (401, 403):
             st.error("Gemini rejected the API key. Please check GEMINI_API_KEY in your .env file.")
+        elif status == 503:
+            st.error("Gemini is busy right now (high demand). Please try again in a few minutes.")
         else:
             st.error(f"Gemini could not generate an explanation: {error}")
         return None
