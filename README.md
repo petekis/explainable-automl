@@ -15,6 +15,7 @@ An interactive AutoML application built with Streamlit that not only trains and 
   - _Manual Selection_ — train a single model of your choice
   - _AutoML Selection_ — automatically detects the task type, trains all suitable models, and selects the best one
 - **Explainability:** Gemini explains the preprocessing recommendations and the model results for users without a strong ML background
+- **Model explainability (SHAP):** feature importance (bar), effect direction (beeswarm) and single-prediction (waterfall) plots for any trained model, plus a plain-language Gemini interpretation of the SHAP results
 
 ## Supported Models
 
@@ -54,7 +55,8 @@ streamlit run explainable_automl.py
 4. Apply preprocessing operations
 5. Train models manually or with AutoML
 6. Ask Gemini to explain the results
+7. Compute SHAP values and ask Gemini to interpret them
 
 ## Tech Stack
 
-Python · Streamlit · pandas · scikit-learn · ydata-profiling · Google Gemini API
+Python · Streamlit · pandas · scikit-learn · SHAP · ydata-profiling · Google Gemini API

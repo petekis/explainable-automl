@@ -46,7 +46,8 @@ DEFAULTS = {
     "preprocess_explanation": None,
     "results_explanation": None,
     "shap_values": None,
-    "shap_model": None
+    "shap_model": None,
+    "shap_explanation": None
 }
 
 KEEP_ON_RESET = ["file_type", "raw_df", "processed_df"]
@@ -63,7 +64,8 @@ def reset_state():
         st.session_state.pop(widget_key, None)
 
 RESULT_KEYS = ["results_df", "selected_model", "task_type", "selected_choice",
-               "trained_models", "results_explanation", "shap_values", "shap_model"]
+               "trained_models", "results_explanation", "shap_values", "shap_model",
+               "shap_explanation"]
 
 def clear_results():
     for key in RESULT_KEYS:
@@ -452,12 +454,36 @@ def compute_shap(model_name):
     shap_values = explainer(sample)
     st.session_state.shap_values = shap_values
     st.session_state.shap_model = model_name
+    st.session_state.shap_explanation = None
     return shap_values
 
 def show_shap_plot(plot_function, explanation):
     plot_function(explanation, show=False)
     st.pyplot(plt.gcf())
     plt.close()
+
+def shap_summary(shap_values, top_n=10):
+    values = shap_values.values
+    data = np.asarray(shap_values.data, dtype=float)
+    importance = np.abs(values).mean(axis=0)
+
+    effects = []
+    for i in range(values.shape[1]):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            corr = np.corrcoef(data[:, i], values[:, i])[0, 1]
+        if corr > 0.3:
+            effects.append("higher values increase the prediction")
+        elif corr < -0.3:
+            effects.append("higher values decrease the prediction")
+        else:
+            effects.append("mixed / unclear")
+
+    summary = pd.DataFrame({
+        "Feature": shap_values.feature_names,
+        "Mean |SHAP|": importance.round(4),
+        "Effect": effects
+    })
+    return summary.sort_values("Mean |SHAP|", ascending=False).head(top_n)
 
 def display_shap():
     if not st.session_state.trained_models:
@@ -482,9 +508,12 @@ def display_shap():
         return
 
     shap_values = st.session_state.shap_values
+    class_label = None
     if shap_values.values.ndim == 3:
         classes = list(model_object.classes_)
-        class_label = st.selectbox("Class to explain", classes, index=1 if len(classes) == 2 else 0)
+        class_label = st.selectbox(
+            "Class to explain", classes, index=1 if len(classes) == 2 else 0,
+            on_change=lambda: st.session_state.update(shap_explanation=None))
         shap_values = shap_values[:, :, classes.index(class_label)]
 
     st.markdown("**Feature importance**")
@@ -501,6 +530,19 @@ def display_shap():
     show_shap_plot(shap.plots.waterfall, shap_values[row])
     st.caption("Starts from the average prediction E[f(x)] and shows how each feature "
                "moved this row's prediction to f(x).")
+
+    summary = shap_summary(shap_values)
+    if st.button("Explain SHAP with Gemini", disabled=client is None):
+        explanation = gemini_shap_explanation(
+            summary, model_name, st.session_state.task_type, class_label)
+        if explanation:
+            st.session_state.shap_explanation = explanation
+
+    if st.session_state.shap_explanation:
+        st.subheader("AI SHAP Explanation")
+        st.write(st.session_state.shap_explanation)
+        with st.expander("Data sent to Gemini"):
+            st.dataframe(summary, hide_index=True)
 
 def show_result(model, task_type, y_test, prediction):
     if task_type == "regression":
@@ -606,6 +648,28 @@ def gemini_preprocess_explanation(rec_dict):
             - Explain which columns are affected.
             - Explain the difference between encoding methods when relevant.
             - Do not recommend an operation if it is not present in the provided recommendations.
+            """
+    return ask_gemini(prompt)
+
+def gemini_shap_explanation(summary_df, model_name, task_type, class_label):
+    class_line = f"Explained class: {class_label}" if class_label is not None else ""
+    prompt = f"""
+            You are an AI assistant inside an Explainable AutoML application.
+
+            Task type: {task_type}
+            Model: {model_name}
+            {class_line}
+
+            SHAP feature summary (mean absolute SHAP value and effect direction):
+            {summary_df.to_string(index=False)}
+
+            Explain these SHAP results to the user in simple language.
+
+            - Start with one sentence explaining what SHAP values are.
+            - Explain the 3-5 most important features and the direction of their effect.
+            - If a feature's effect is "mixed / unclear", do not claim a clear direction.
+            - Make clear that SHAP shows what the model learned, not cause and effect.
+            - Only mention features that appear in the summary.
             """
     return ask_gemini(prompt)
 
