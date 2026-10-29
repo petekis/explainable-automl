@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from streamlit import dataframe, session_state
 from ydata_profiling import ProfileReport
 import streamlit.components.v1 as components
 from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder, StandardScaler
@@ -13,7 +12,7 @@ from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.base import is_classifier
-from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, ConfusionMatrixDisplay
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import os
 from dotenv import load_dotenv
@@ -345,7 +344,7 @@ def model_selection():
 
             if task_type == "classification":
                 selected_model = results_df.loc[
-                    results_df["Accuracy Score"].idxmax()
+                    results_df["F1 Score"].idxmax()
                 ]
 
             else:
@@ -565,12 +564,12 @@ def show_result(model, task_type, y_test, prediction):
 
     if task_type == "classification":
         model_name = model
-        class_report = classification_report(y_test, prediction)
-        acc_score = accuracy_score(y_test, prediction)
-        conf_matrix = confusion_matrix(y_test, prediction)
         result_dict = {
             "Model": model_name,
-            "Accuracy Score": acc_score,
+            "Accuracy Score": accuracy_score(y_test, prediction),
+            "Precision": precision_score(y_test, prediction, average="weighted", zero_division=0),
+            "Recall": recall_score(y_test, prediction, average="weighted", zero_division=0),
+            "F1 Score": f1_score(y_test, prediction, average="weighted", zero_division=0)
         }
         return result_dict
 

@@ -27,7 +27,7 @@ An interactive AutoML application built with Streamlit that not only trains and 
 | Logistic Regression    | Linear Regression      |
 | K-Nearest Neighbors    | Gradient Boosting      |
 
-Evaluation metrics: **Accuracy** for classification; **MAE, RMSE, R²** for regression.
+Evaluation metrics: **Accuracy, Precision, Recall, F1 Score** (weighted) for classification; **MAE, RMSE, R²** for regression.
 
 ## Installation
 
