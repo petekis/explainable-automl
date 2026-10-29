@@ -12,6 +12,7 @@ from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import train_test_split
+from sklearn.base import is_classifier
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, ConfusionMatrixDisplay
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import os
@@ -373,7 +374,7 @@ def model_process(model, task_type):
         model_object = SVR()
 
     if model == "Support Vector Machine Classifier":
-        model_object = SVC()
+        model_object = SVC(probability=True, random_state=42)
 
     if model == "Decision Tree Regressor":
         model_object = DecisionTreeRegressor(random_state=42)
@@ -448,7 +449,10 @@ def compute_shap(model_name):
     else:
         background = shap.sample(background, SHAP_SLOW_SAMPLE_SIZE, random_state=42)
         sample = shap.sample(sample, SHAP_SLOW_SAMPLE_SIZE, random_state=42)
-        predict = lambda data: model_object.predict(pd.DataFrame(data, columns=feature_names))
+        if is_classifier(model_object):
+            predict = lambda data: model_object.predict_proba(pd.DataFrame(data, columns=feature_names))
+        else:
+            predict = lambda data: model_object.predict(pd.DataFrame(data, columns=feature_names))
         explainer = shap.Explainer(predict, background)
 
     shap_values = explainer(sample)
@@ -497,7 +501,7 @@ def display_shap():
 
     if not isinstance(model_object, TREE_MODELS + LINEAR_MODELS):
         st.caption("This model has no built-in SHAP support, so a slower model-agnostic method is used "
-                   f"on {SHAP_SLOW_SAMPLE_SIZE} test rows, and it explains the predicted value directly.")
+                   f"on {SHAP_SLOW_SAMPLE_SIZE} test rows.")
 
     if st.button("Compute SHAP values"):
         with st.spinner("Computing SHAP values..."):
@@ -726,8 +730,12 @@ if st.session_state.raw_df is not None:
     st.subheader("Select Target Column")
     if st.session_state.X_train is None:
         target = st.selectbox("Please select the target column", options=st.session_state.processed_df.columns, key="target")
+        missing_target = st.session_state.processed_df[target].isnull().sum()
+        if missing_target > 0:
+            st.info(f"{missing_target} rows have a missing value in `{target}`. "
+                    "Target values should not be imputed, so these rows will be removed when you split the data.")
         if st.button("Split"):
-            df = st.session_state.processed_df.copy()
+            df = st.session_state.processed_df.dropna(subset=[target])
             X = df.drop(target, axis=1)
             y = df[target]
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42)
