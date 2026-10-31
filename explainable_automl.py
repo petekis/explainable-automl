@@ -16,9 +16,11 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import os
 from dotenv import load_dotenv
-from google import genai
-import copy 
+from google import genai 
 import shap
+
+from state import init_state, reset_state, clear_results
+from config import HIGH_MISSING_RATIO, SHAP_BACKGROUND_SIZE, SHAP_SAMPLE_SIZE, SHAP_SLOW_SAMPLE_SIZE, GEMINI_MODEL, RANDOM_STATE
 
 load_dotenv()
 
@@ -29,54 +31,14 @@ client = genai.Client(api_key=api_key) if api_key else None
 st.title("Explainable AutoML")
 if client is None:
     st.warning("GEMINI API key is not set in the .env file. AI explanations are disabled.")
-DEFAULTS = {
-    "file_type": None,
-    "raw_df": None,
-    "processed_df": None,
-    "X_train": None,
-    "X_test": None,
-    "y_train": None,
-    "y_test": None,
-    "target_column": None,
-    "task_type": None,
-    "results_df": None,
-    "selected_model": None,
-    "selected_choice": None,
-    "trained_models": {},
-    "preprocess_explanation": None,
-    "results_explanation": None,
-    "shap_values": None,
-    "shap_model": None,
-    "shap_explanation": None
-}
 
-KEEP_ON_RESET = ["file_type", "raw_df", "processed_df"]
-
-for key, value in DEFAULTS.items():
-    if key not in st.session_state:
-        st.session_state[key] = copy.deepcopy(value)
-
-def reset_state():
-    for key, value in DEFAULTS.items():
-        if key not in KEEP_ON_RESET:
-            st.session_state[key] = copy.deepcopy(value)
-    for widget_key in ["target", "encoding_column", "imputation_columns","drop_column"]:
-        st.session_state.pop(widget_key, None)
-
-RESULT_KEYS = ["results_df", "selected_model", "task_type", "selected_choice",
-               "trained_models", "results_explanation", "shap_values", "shap_model",
-               "shap_explanation"]
-
-def clear_results():
-    for key in RESULT_KEYS:
-        st.session_state[key] = copy.deepcopy(DEFAULTS[key])
+init_state()
 
 def analize_data(df):
     with st.spinner("Analizing data..."):
         profile = ProfileReport(df, title="Data Analysis")
         components.html(profile.to_html(), height=1000, scrolling=True)
 
-HIGH_MISSING_RATIO = 50
 def missing_value_advice(series, percentage):
     is_numeric = pd.api.types.is_numeric_dtype(series)
     if percentage > HIGH_MISSING_RATIO:
@@ -418,9 +380,6 @@ def model_process(model, task_type):
 TREE_MODELS = (RandomForestClassifier, RandomForestRegressor, DecisionTreeClassifier,
                DecisionTreeRegressor, GradientBoostingRegressor)
 LINEAR_MODELS = (LinearRegression, LogisticRegression)
-SHAP_BACKGROUND_SIZE = 100
-SHAP_SAMPLE_SIZE = 200
-SHAP_SLOW_SAMPLE_SIZE = 50
 
 def compute_shap(model_name):
     if model_name not in st.session_state.trained_models:
@@ -577,10 +536,10 @@ def ask_gemini(prompt):
     if client is None:
         st.error("Gemini is not configured. Add GEMINI_API_KEY to your .env file.")
         return None
-
+    
     try:
         response = client.models.generate_content(
-            model = "gemini-3.6-flash",
+            model = GEMINI_MODEL,
             contents = prompt)
         return response.text
     except Exception as error:
