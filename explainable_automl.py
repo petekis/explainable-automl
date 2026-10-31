@@ -1,32 +1,17 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 from ydata_profiling import ProfileReport
 import streamlit.components.v1 as components
 from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder, StandardScaler
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingRegressor
-from sklearn.svm import SVC, SVR
-from sklearn.linear_model import LogisticRegression, LinearRegression
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
-from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.base import is_classifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import os
-from dotenv import load_dotenv
-from google import genai 
 import shap
-
 from state import init_state, reset_state, clear_results
-from config import HIGH_MISSING_RATIO, SHAP_BACKGROUND_SIZE, SHAP_SAMPLE_SIZE, SHAP_SLOW_SAMPLE_SIZE, GEMINI_MODEL, RANDOM_STATE
-
-load_dotenv()
-
-api_key = os.getenv("GEMINI_API_KEY")
-
-client = genai.Client(api_key=api_key) if api_key else None
+from config import HIGH_MISSING_RATIO, SHAP_SLOW_SAMPLE_SIZE, RANDOM_STATE
+from core.llm import gemini_preprocess_explanation, gemini_explanation, gemini_shap_explanation, GeminiError, client
+from core.analysis import build_recommendations, missing_value_advice, check_training_readiness
+from core.models import MODEL_REGISTRY,get_tasktype, models_for_task, train_model, predict, evaluate
+from core.explain import compute_shap, shap_summary, has_fast_explainer
 
 st.title("Explainable AutoML")
 if client is None:
@@ -38,19 +23,6 @@ def analize_data(df):
     with st.spinner("Analizing data..."):
         profile = ProfileReport(df, title="Data Analysis")
         components.html(profile.to_html(), height=1000, scrolling=True)
-
-def missing_value_advice(series, percentage):
-    is_numeric = pd.api.types.is_numeric_dtype(series)
-    if percentage > HIGH_MISSING_RATIO:
-        if is_numeric:
-            return ("More than half of the values are missing. Imputation would mostly create "
-                    "artificial values; consider dropping this column.")
-        return ("More than half of the values are missing. Instead of imputation, encode this column "
-                "so that missing values become their own category, or drop it.")
-    if is_numeric:
-        return "Median imputation is recommended."
-    return "Mode (most frequent value) imputation is recommended."
-
 
 def basic_analysis(df):
     with st.expander("Basic Analysis"):
@@ -64,58 +36,6 @@ def basic_analysis(df):
             "Categorical Columns: ", df.select_dtypes(include=["object", "category"]),
             "Number of duplicated rows (extra copies): ", df.duplicated().sum()
         )
-
-def show_recommendations(df):
-    rec_dict = {}
-    numerical_columns = df.select_dtypes(include=["int64", "float64"]).columns
-    if len(numerical_columns) != 0:
-        rec_dict["scaling"] = {}
-        rec_dict["scaling"]["numeric_col"] = numerical_columns.tolist()
-        rec_dict["scaling"]["recommendation"] = "Numerical columns is detected. Scaling is recommended"
-    categorical_columns = df.select_dtypes(include=["object", "category"]).columns
-    if len(categorical_columns) != 0:
-        rec_dict["encoding"] = []
-        for column in categorical_columns:
-            unique_count = df[column].nunique()
-            if unique_count <= 2:
-                rec_dict["encoding"].append({
-                    "column": column,
-                    "unique_values": unique_count,
-                    "method": "Ordinal Encoding",
-                    "recommendation": "Binary categorical column. Ordinal Encoding is recommended."
-                })
-            else:
-                rec_dict["encoding"].append({
-                    "column": column,
-                    "unique_values": unique_count,
-                    "method": "One-Hot Encoding",
-                    "recommendation": "Categorical column with more than two categories. One-Hot Encoding is recommended."
-                })
-    missing_ratio = df.isnull().sum() * 100 / df.shape[0]
-    missing_ratio = missing_ratio[missing_ratio > 0]
-    if not missing_ratio.empty:
-        rec_dict["missing_val"] = []
-        for column, percentage in missing_ratio.items():
-            rec_dict["missing_val"].append({
-                "column": column,
-                "missing_percentage": round(percentage, 1),
-                "recommendation": missing_value_advice(df[column], percentage)
-            })
-    duplicated_mask = df.duplicated(keep=False)
-    if duplicated_mask.any():
-        groups = int(df[duplicated_mask].drop_duplicates().shape[0])
-        extra_copies = int(df.duplicated().sum())
-        rec_dict["duplicated"] = {
-            "groups": groups,
-            "extra_copies": extra_copies,
-            "recommendation": (
-                f"{groups} distinct rows appear more than once ({extra_copies} extra copies). "
-                "If each row should be a unique record (e.g., the data has an ID column), these are likely "
-                "real duplicates and should be dropped. If identical rows can belong to different records "
-                "(e.g., there is no ID column), review them before dropping."
-            )
-        }
-    return rec_dict
 
 def display_recommendations(rec_dict, df):
     if "scaling" in rec_dict:
@@ -223,27 +143,6 @@ def apply_recommendations():
                 st.success(f"`{column}` dropped.")
                 st.rerun()
 
-
-def get_tasktype(model):
-    classification_models = {"Random Forest Classifier", "Support Vector Machine Classifier",
-        "Decision Tree Classifier", "Logistic Regressor", "KNN"}
-
-    return "classification" if model in classification_models else "regression"
-
-def check_training_readiness(X_train, X_test):
-    problems = []
-    categorical_columns = X_train.select_dtypes(include=["object", "category"]).columns.tolist()
-    if categorical_columns:
-        problems.append(f"Encode these categorical columns: {', '.join(categorical_columns)}")
-
-    missing = X_train.isnull().sum() + X_test.isnull().sum()
-    missing = missing[missing > 0]
-    if not missing.empty:
-        details = ", ".join(f"{column} ({count} missing)" for column, count in missing.items())
-        problems.append(f"Impute missing values in: {details}")
-
-    return problems
-
 def model_selection():
     problems = check_training_readiness(st.session_state.X_train, st.session_state.X_test)
     if problems:
@@ -253,9 +152,7 @@ def model_selection():
     y_train = st.session_state.y_train
     choice = st.radio("Model Selection Preference", ["Manual Selection", "AutoML Selection"])
     if choice == "Manual Selection":
-        model = st.selectbox("Please select your model", (
-        "Random Forest Regressor", "Random Forest Classifier", "Support Vector Machine Regressor","Support Vector Machine Classifier", "Decision Tree Classifier","Decision Tree Regressor",
-        "Logistic Regressor","Gradient Boosting Regressor", "KNN", "Linear Regressor"), key="model_selection")
+        model = st.selectbox("Please select your model", list(MODEL_REGISTRY), key="model_selection")
         if st.button("Apply Model"):
             clear_results()
 
@@ -271,12 +168,6 @@ def model_selection():
     else:
         unique_ratio = y_train.nunique() / len(y_train)
         recommended_task = "classification" if unique_ratio <= 0.30 else "regression"
-        model_list = {
-            "classification": ["Random Forest Classifier", "Support Vector Machine Classifier", "Decision Tree Classifier",
-                                      "Logistic Regressor", "KNN"],
-            "regression": ["Random Forest Regressor", "Support Vector Machine Regressor",
-                            "Decision Tree Regressor", "Linear Regressor", "Gradient Boosting Regressor"]
-        }
         with st.expander("Task Type Recommendation"):
             st.write(f"Recommended task type: {recommended_task}")
 
@@ -286,7 +177,7 @@ def model_selection():
                 index=0 if recommended_task == "classification" else 1
             )
 
-            model_list = model_list[task_type]
+            model_list = models_for_task(task_type)
 
         if st.button("Run AutoML"):
             clear_results()
@@ -325,127 +216,15 @@ def display_results():
         st.success(f"Selected Model: {st.session_state.selected_model['Model']}")
 
 def model_process(model, task_type):
-    if model == "Random Forest Regressor":
-        model_object = RandomForestRegressor(random_state=42)
-
-    if model == "Random Forest Classifier":
-        model_object = RandomForestClassifier(random_state=42)
-
-    if model == "Support Vector Machine Regressor":
-        model_object = SVR()
-
-    if model == "Support Vector Machine Classifier":
-        model_object = SVC(probability=True, random_state=42)
-
-    if model == "Decision Tree Regressor":
-        model_object = DecisionTreeRegressor(random_state=42)
-
-    if model == "Decision Tree Classifier":
-        model_object = DecisionTreeClassifier(random_state=42)
-
-    if model == "Logistic Regressor":
-        model_object = LogisticRegression()
-
-    if model == "Gradient Boosting Regressor":
-        model_object = GradientBoostingRegressor(random_state=42)
-
-    if model == "Linear Regressor":
-        model_object = LinearRegression()
-
-    if model == "KNN":
-        model_object = KNeighborsClassifier()
-
-    X_train = st.session_state.X_train.copy()
-    X_test = st.session_state.X_test.copy()
-    y_train = st.session_state.y_train
-    y_test = st.session_state.y_test
-    feature_names = X_train.columns.tolist()
-
-    scaler = None
-    if isinstance(model_object, (LinearRegression, SVR, SVC, KNeighborsClassifier, LogisticRegression)):
-        scaler = StandardScaler().set_output(transform="pandas")
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
-
-    model_object.fit(X_train, y_train)
-    prediction = model_object.predict(X_test)
-
-    st.session_state.trained_models[model] = {
-        "model": model_object,
-        "scaler": scaler,
-        "feature_names": feature_names
-    }
-    return show_result(model, task_type, y_test, prediction)
-
-TREE_MODELS = (RandomForestClassifier, RandomForestRegressor, DecisionTreeClassifier,
-               DecisionTreeRegressor, GradientBoostingRegressor)
-LINEAR_MODELS = (LinearRegression, LogisticRegression)
-
-def compute_shap(model_name):
-    if model_name not in st.session_state.trained_models:
-        st.error(f"Model '{model_name}' is not trained yet.")
-        return None
-
-    model_info = st.session_state.trained_models[model_name]
-    model_object = model_info["model"]
-    scaler = model_info["scaler"]
-    feature_names = model_info["feature_names"]
-
-    X_train = st.session_state.X_train[feature_names]
-    X_test = st.session_state.X_test[feature_names]
-    if scaler is not None:
-        X_train = scaler.transform(X_train)
-        X_test = scaler.transform(X_test)
-
-    background = shap.sample(X_train, SHAP_BACKGROUND_SIZE, random_state=42)
-    sample = shap.sample(X_test, SHAP_SAMPLE_SIZE, random_state=42)
-
-    if isinstance(model_object, TREE_MODELS):
-        explainer = shap.TreeExplainer(model_object)
-    elif isinstance(model_object, LINEAR_MODELS):
-        explainer = shap.LinearExplainer(model_object, background)
-    else:
-        background = shap.sample(background, SHAP_SLOW_SAMPLE_SIZE, random_state=42)
-        sample = shap.sample(sample, SHAP_SLOW_SAMPLE_SIZE, random_state=42)
-        if is_classifier(model_object):
-            predict = lambda data: model_object.predict_proba(pd.DataFrame(data, columns=feature_names))
-        else:
-            predict = lambda data: model_object.predict(pd.DataFrame(data, columns=feature_names))
-        explainer = shap.Explainer(predict, background)
-
-    shap_values = explainer(sample)
-    st.session_state.shap_values = shap_values
-    st.session_state.shap_model = model_name
-    st.session_state.shap_explanation = None
-    return shap_values
+    model_info = train_model(model, st.session_state.X_train, st.session_state.y_train)
+    prediction = predict(model_info, st.session_state.X_test)
+    st.session_state.trained_models[model] = model_info
+    return evaluate(model, task_type, st.session_state.y_test, prediction)
 
 def show_shap_plot(plot_function, explanation):
     plot_function(explanation, show=False)
     st.pyplot(plt.gcf())
     plt.close()
-
-def shap_summary(shap_values, top_n=10):
-    values = shap_values.values
-    data = np.asarray(shap_values.data, dtype=float)
-    importance = np.abs(values).mean(axis=0)
-
-    effects = []
-    for i in range(values.shape[1]):
-        with np.errstate(divide="ignore", invalid="ignore"):
-            corr = np.corrcoef(data[:, i], values[:, i])[0, 1]
-        if corr > 0.3:
-            effects.append("higher values increase the prediction")
-        elif corr < -0.3:
-            effects.append("higher values decrease the prediction")
-        else:
-            effects.append("mixed / unclear")
-
-    summary = pd.DataFrame({
-        "Feature": shap_values.feature_names,
-        "Mean |SHAP|": importance.round(4),
-        "Effect": effects
-    })
-    return summary.sort_values("Mean |SHAP|", ascending=False).head(top_n)
 
 def display_shap():
     if not st.session_state.trained_models:
@@ -457,15 +236,20 @@ def display_shap():
     model_name = st.selectbox("Model to explain", model_names, index=model_names.index(default_model))
     model_object = st.session_state.trained_models[model_name]["model"]
 
-    if not isinstance(model_object, TREE_MODELS + LINEAR_MODELS):
+    if not has_fast_explainer(model_object):
         st.caption("This model has no built-in SHAP support, so a slower model-agnostic method is used "
                    f"on {SHAP_SLOW_SAMPLE_SIZE} test rows.")
 
     if st.button("Compute SHAP values"):
         with st.spinner("Computing SHAP values..."):
-            compute_shap(model_name)
+            st.session_state.shap_values = compute_shap(
+                st.session_state.trained_models[model_name],
+                st.session_state.X_train,
+                st.session_state.X_test
+            )
+            st.session_state.shap_model = model_name
+            st.session_state.shap_explanation = None
             
-
     if st.session_state.shap_values is None or st.session_state.shap_model != model_name:
         return
 
@@ -495,8 +279,7 @@ def display_shap():
 
     summary = shap_summary(shap_values)
     if st.button("Explain SHAP with Gemini", disabled=client is None):
-        explanation = gemini_shap_explanation(
-            summary, model_name, st.session_state.task_type, class_label)
+        explanation = explain_with_gemini(gemini_shap_explanation, summary, model_name, st.session_state.task_type, class_label)
         if explanation:
             st.session_state.shap_explanation = explanation
 
@@ -506,137 +289,14 @@ def display_shap():
         with st.expander("Data sent to Gemini"):
             st.dataframe(summary, hide_index=True)
 
-def show_result(model, task_type, y_test, prediction):
-    if task_type == "regression":
-        model_name = model
-        mae = mean_absolute_error(y_test, prediction)
-        mse = mean_squared_error(y_test, prediction)
-        rmse = mse ** 0.5
-        r2 = r2_score(y_test, prediction)
-        result_dict = {
-            "Model": model_name,
-            "MAE": mae,
-            "RMSE": rmse,
-            "R²": r2
-        }
-        return result_dict
-
-    if task_type == "classification":
-        model_name = model
-        result_dict = {
-            "Model": model_name,
-            "Accuracy Score": accuracy_score(y_test, prediction),
-            "Precision": precision_score(y_test, prediction, average="weighted", zero_division=0),
-            "Recall": recall_score(y_test, prediction, average="weighted", zero_division=0),
-            "F1 Score": f1_score(y_test, prediction, average="weighted", zero_division=0)
-        }
-        return result_dict
-
-def ask_gemini(prompt):
-    if client is None:
-        st.error("Gemini is not configured. Add GEMINI_API_KEY to your .env file.")
-        return None
-    
+def explain_with_gemini(explain_function, *args):
     try:
-        response = client.models.generate_content(
-            model = GEMINI_MODEL,
-            contents = prompt)
-        return response.text
-    except Exception as error:
-        status = getattr(error, "code", None)
-        if status == 429:
-            st.error("Gemini quota exceeded. Please wait a while and try again.")
-        elif status in (401, 403):
-            st.error("Gemini rejected the API key. Please check GEMINI_API_KEY in your .env file.")
-        elif status == 503:
-            st.error("Gemini is busy right now (high demand). Please try again in a few minutes.")
-        else:
-            st.error(f"Gemini could not generate an explanation: {error}")
+        return explain_function(*args)
+    except GeminiError as error:
+        st.error(str(error))
         return None
-
-def gemini_explanation(results_df, task_type, selected_model, selected_choice):
-    if selected_choice == "Manual Selection":
-        selection_instruction = f"""
-            The user manually selected the following model:
-
-            {selected_model["Model"]}
-
-            Explain the performance of this selected model.
-            Do not describe it as the automatically best model.
-            Explain its metrics and what the results mean.
-            """
-
-    else:
-        selection_instruction = f"""
-            The system evaluated multiple models automatically.
-
-            The best performing model was:
-
-            {selected_model["Model"]}
-
-            Explain why this model was selected compared with
-            the other models.
-            """
-
-    prompt = f"""
-        You are an AI assistant inside an Explainable AutoML application.
-
-        Task type: {task_type}
-
-        Model comparison results:
-        {results_df.to_string(index=False)}
-
-        {selection_instruction}
-
-        Explain the results in simple language for a user
-        who may not have a strong machine learning background.
-
-        Also explain what the evaluation metrics mean.
-        """
-    return ask_gemini(prompt)
-
-def gemini_preprocess_explanation(rec_dict):
-    prompt = f"""
-            You are an AI assistant inside an Explainable AutoML application.
-
-            Here are the preprocessing recommendations generated by the system:
-
-            {rec_dict}
-
-            Explain these recommendations to the user in simple language.
-
-            For each recommendation:
-            - Explain why this preprocessing operation may be needed.
-            - Explain which columns are affected.
-            - Explain the difference between encoding methods when relevant.
-            - Do not recommend an operation if it is not present in the provided recommendations.
-            """
-    return ask_gemini(prompt)
-
-def gemini_shap_explanation(summary_df, model_name, task_type, class_label):
-    class_line = f"Explained class: {class_label}" if class_label is not None else ""
-    prompt = f"""
-            You are an AI assistant inside an Explainable AutoML application.
-
-            Task type: {task_type}
-            Model: {model_name}
-            {class_line}
-
-            SHAP feature summary (mean absolute SHAP value and effect direction):
-            {summary_df.to_string(index=False)}
-
-            Explain these SHAP results to the user in simple language.
-
-            - Start with one sentence explaining what SHAP values are.
-            - Explain the 3-5 most important features and the direction of their effect.
-            - If a feature's effect is "mixed / unclear", do not claim a clear direction.
-            - Make clear that SHAP shows what the model learned, not cause and effect.
-            - Only mention features that appear in the summary.
-            """
-    return ask_gemini(prompt)
 
 st.session_state.file_type = st.selectbox("File type:", ["CSV", "Excel"], index=None, placeholder="Select a file type")
-
 if st.session_state.file_type == "CSV":
     uploaded_file = st.file_uploader("Choose a CSV file:", type=["csv"])
     if uploaded_file is not None:
@@ -664,7 +324,7 @@ if st.session_state.raw_df is not None:
 
     basic_analysis(st.session_state.processed_df)
     st.subheader("Preprocessing Recommendations")
-    rest_dict = show_recommendations(st.session_state.processed_df)
+    rest_dict = build_recommendations(st.session_state.processed_df)
     display_recommendations(rest_dict, st.session_state.processed_df)
 
     if "duplicated" in rest_dict:
@@ -677,7 +337,7 @@ if st.session_state.raw_df is not None:
             st.caption("Duplicate rows can only be dropped before splitting the data.")
 
     if rest_dict and st.button("Explain Recommendations with Gemini", disabled=client is None):
-        explanation = gemini_preprocess_explanation(rest_dict)
+        explanation = explain_with_gemini(gemini_preprocess_explanation, rest_dict)
         if explanation:
             st.session_state.preprocess_explanation = explanation
 
@@ -696,7 +356,7 @@ if st.session_state.raw_df is not None:
             df = st.session_state.processed_df.dropna(subset=[target])
             X = df.drop(target, axis=1)
             y = df[target]
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42)
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=RANDOM_STATE)
             st.session_state.X_train = X_train
             st.session_state.X_test = X_test
             st.session_state.y_train = y_train
@@ -723,7 +383,8 @@ if st.session_state.raw_df is not None:
             and st.session_state.task_type is not None
             and st.session_state.selected_choice is not None):
 
-            explanation = gemini_explanation(
+            explanation = explain_with_gemini(
+                gemini_explanation,
                 st.session_state.results_df,
                 st.session_state.task_type,
                 st.session_state.selected_model,
