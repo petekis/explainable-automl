@@ -8,9 +8,11 @@ An interactive AutoML application built with Streamlit that not only trains and 
 - **Data analysis:** basic statistics, missing values, duplicates, and a detailed profiling report (ydata-profiling)
 - **Preprocessing recommendations:** automatic suggestions for scaling, encoding, missing value handling, and duplicate rows
 - **Preprocessing operations** (fitted on the training set only to prevent data leakage):
-  - Encoding: Label Encoding (binary) / One-Hot Encoding (multi-class)
+  - Encoding: Ordinal Encoding (binary) / One-Hot Encoding (multi-class)
   - Scaling: StandardScaler
   - Imputation: median (numerical) / mode (categorical)
+  - Drop Column: remove features that should not be used for training
+- **Data cleaning before the split:** duplicate rows can be dropped, and rows with a missing target value are removed automatically
 - **Model training:**
   - _Manual Selection_ — train a single model of your choice
   - _AutoML Selection_ — automatically detects the task type, trains all suitable models, and selects the best one
@@ -46,7 +48,7 @@ GEMINI_API_KEY=your_api_key_here
 ## Usage
 
 ```bash
-streamlit run explainable_automl.py
+streamlit run app.py
 ```
 
 1. Upload a CSV or Excel file
@@ -56,6 +58,27 @@ streamlit run explainable_automl.py
 5. Train models manually or with AutoML
 6. Ask Gemini to explain the results
 7. Compute SHAP values and ask Gemini to interpret them
+
+## Project Structure
+
+```
+app.py                    # Streamlit entry point: page flow
+config.py                 # shared constants (thresholds, SHAP sample sizes, Gemini model, random state)
+state.py                  # session state defaults and reset helpers
+core/                     # application logic, independent of Streamlit
+  analysis.py             # preprocessing recommendations and training readiness checks
+  models.py               # model registry, training, prediction and evaluation
+  explain.py              # SHAP computation and summary
+  llm.py                  # Gemini client and prompts
+ui/                       # Streamlit views
+  data_view.py            # data analysis and recommendations
+  preprocessing_view.py   # preprocessing operations
+  model_view.py           # model selection and results
+  shap_view.py            # SHAP plots and explanations
+  gemini_view.py          # Gemini error handling for the UI
+```
+
+The `core` modules do not import Streamlit, so the logic can be reused and tested without the UI.
 
 ## Tech Stack
 
